@@ -81,6 +81,7 @@
 
   var q = new URLSearchParams(location.search);
   var K = (q.get('k') || '').trim(), T = q.get('t') || '', API = q.get('api') || DEFAULT_API;
+  var U = (q.get('u') || '').trim();   // 上げた人のﾒｰﾙ (AppSheet の USEREMAIL()。ｱｯﾌﾟﾛｰﾄﾞ通知ﾒｰﾙ用)
 
   var $ = function (id) { return document.getElementById(id); };
   var statusEl = $('status'), fillEl = $('fill'), gridEl = $('grid'), pickBtn = $('pickBtn'), picker = $('picker'), againBtn = $('again');
@@ -101,7 +102,7 @@
   function enablePick(on) { pickBtn.setAttribute('aria-disabled', on ? 'false' : 'true'); }
 
   function call(body) {
-    body.t = T; body.k = K;
+    body.t = T; body.k = K; if (U) body.u = U;
     return fetch(API, {
       method: 'POST', credentials: 'omit', redirect: 'follow',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
