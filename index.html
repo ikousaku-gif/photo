@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>写真まとめて送る</title>
+<style>
+  :root {
+    --bg: #f3f5f8; --card: #ffffff; --text: #1f2328; --sub: #5f6873;
+    --blue: #1a73e8; --blue-soft: #e8f0fe; --green: #1e7e34; --green-soft: #e6f4ea;
+    --red: #b3261e; --red-soft: #fdecea; --line: #dde2e8;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif; }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 16px; }
+  .kouji { background: var(--card); border-radius: 14px; padding: 14px 16px; box-shadow: 0 1px 4px rgba(0,0,0,.06); }
+  .kouji .no { font-size: 13px; color: var(--blue); font-weight: 700; }
+  .kouji .name { font-size: 18px; font-weight: 700; margin-top: 2px; word-break: break-all; }
+  .pick { display: flex; align-items: center; justify-content: center; gap: 10px;
+    margin: 16px 0 10px; width: 100%; min-height: 84px; border: 0; border-radius: 16px;
+    background: var(--blue); color: #fff; font-size: 24px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 3px 10px rgba(26,115,232,.35); }
+  .pick:active { transform: scale(.98); }
+  .pick[aria-disabled="true"] { background: #9db8e6; box-shadow: none; pointer-events: none; }
+  .hint { font-size: 13px; color: var(--sub); text-align: center; margin: 0 0 12px; }
+  .status { border-radius: 12px; padding: 14px 16px; font-size: 17px; font-weight: 700;
+    background: var(--blue-soft); color: var(--blue); }
+  .status.done { background: var(--green-soft); color: var(--green); font-size: 22px; text-align: center; padding: 20px 16px; }
+  .status.err { background: var(--red-soft); color: var(--red); }
+  .track { height: 10px; background: var(--line); border-radius: 5px; overflow: hidden; margin: 10px 0 14px; }
+  .fill { height: 100%; width: 0; background: var(--blue); transition: width .3s; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; }
+  .cell { position: relative; aspect-ratio: 1; border-radius: 10px; overflow: hidden; background: #dfe3e8; }
+  .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cell .tag { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 4px; font-size: 12px;
+    font-weight: 700; text-align: center; color: #fff; background: rgba(0,0,0,.55); }
+  .cell.ok .tag { background: rgba(30,126,52,.9); }
+  .cell.ng .tag { background: rgba(179,38,30,.92); }
+  .cell.ng { outline: 3px solid var(--red); }
+  .again { display: none; width: 100%; margin-top: 14px; min-height: 56px; border-radius: 12px;
+    border: 2px solid var(--blue); background: var(--card); color: var(--blue); font-size: 18px; font-weight: 700; }
+  .note { font-size: 12px; color: var(--sub); margin-top: 18px; line-height: 1.6; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #15181c; --card: #1f2329; --text: #e8eaed; --sub: #a0a8b2; --blue: #5b9cf5;
+      --blue-soft: #1d2b40; --green: #6fcf87; --green-soft: #17301f; --red: #f28b82; --red-soft: #3a1d1b; --line: #2e343c; }
+    .pick { color: #0d1b2e; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="kouji"><div class="no" id="no">工事NO. ―</div><div class="name" id="name">読み込み中…</div></div>
+
+  <label class="pick" id="pickBtn" for="picker" aria-disabled="true">📷 写真を選ぶ</label>
+  <input id="picker" type="file" accept="image/*" multiple hidden>
+  <p class="hint">何枚でもまとめて選べます。送り終わるまでこの画面のままにしてください。</p>
+
+  <div class="status" id="status">準備中…</div>
+  <div class="track"><div class="fill" id="fill"></div></div>
+  <div class="grid" id="grid"></div>
+  <button class="again" id="again" type="button">📷 続けて写真を選ぶ</button>
+
+  <p class="note">写真は送る前にこのｽﾏﾎの中で小さくしてから送ります (長い辺 1600px)。<br>終わったら「戻る」で AppSheet に戻ってください。</p>
+</div>
+
+<script>
+(function () {
+  'use strict';
+  // 写真取込 Web App (deploy AKfycbzyVW_K8V_…)。?api= で差し替え可。
+  var DEFAULT_API = 'https://script.google.com/macros/s/AKfycbzyVW_K8V_-hY5hOjDs5gGtefpwGrQZToM_hoHiJ7y7Y2I8W9cXuRKeZo4e1Mpm_A6RRA/exec';
+  var MAX_SIDE = 1600, JPEG_Q = 0.85, PARALLEL = 3;
+
+  var q = new URLSearchParams(location.search);
+  var K = (q.get('k') || '').trim(), T = q.get('t') || '', API = q.get('api') || DEFAULT_API;
+
+  var $ = function (id) { return document.getElementById(id); };
+  var statusEl = $('status'), fillEl = $('fill'), gridEl = $('grid'), pickBtn = $('pickBtn'), picker = $('picker'), againBtn = $('again');
+
+  var queue = [], active = 0, total = 0, saved = 0, failed = 0, busy = false, importing = false, t0 = 0;
+
+  function setStatus(t, cls) { statusEl.textContent = t; statusEl.className = 'status' + (cls ? ' ' + cls : ''); }
+  function bar(p) { fillEl.style.width = Math.max(0, Math.min(100, p)) + '%'; }
+  function enablePick(on) { pickBtn.setAttribute('aria-disabled', on ? 'false' : 'true'); }
+
+  function call(body) {
+    body.t = T; body.k = K;
+    return fetch(API, {
+      method: 'POST', credentials: 'omit', redirect: 'follow',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(body)
+    }).then(function (r) {
+      if (!r.ok) throw new Error('通信ｴﾗｰ ' + r.status);
+      return r.json();
+    });
+  }
+
+  // ---- 画像を小さくする (失敗したら元のまま送る) ----
+  function shrink(file) {
+    return new Promise(function (resolve) {
+      var url = URL.createObjectURL(file);
+      var img = new Image();
+      img.onload = function () {
+        var w = img.naturalWidth, h = img.naturalHeight, s = Math.min(1, MAX_SIDE / Math.max(w, h));
+        if (s >= 1 && file.size < 900 * 1024 && /jpe?g/i.test(file.type)) { URL.revokeObjectURL(url); resolve(file); return; }
+        var c = document.createElement('canvas');
+        c.width = Math.round(w * s); c.height = Math.round(h * s);
+        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+        URL.revokeObjectURL(url);
+        c.toBlob(function (b) { resolve(b && b.size < file.size ? b : file); }, 'image/jpeg', JPEG_Q);
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); resolve(file); };   // HEIC 等は元のまま (GAS 側で変換)
+      img.src = url;
+    });
+  }
+  function toB64(blob) {
+    return new Promise(function (resolve, reject) {
+      var r = new FileReader();
+      r.onload = function () { resolve(String(r.result).split(',')[1]); };
+      r.onerror = function () { reject(new Error('読込失敗')); };
+      r.readAsDataURL(blob);
+    });
+  }
+
+  function addCell(file) {
+    var d = document.createElement('div'); d.className = 'cell';
+    var img = document.createElement('img'); img.alt = ''; img.loading = 'lazy';
+    img.src = URL.createObjectURL(file);
+    img.onload = function () { URL.revokeObjectURL(img.src); };
+    var tag = document.createElement('div'); tag.className = 'tag'; tag.textContent = '待ち';
+    d.appendChild(img); d.appendChild(tag); gridEl.appendChild(d);
+    return { el: d, tag: tag };
+  }
+
+  function addFiles(list) {
+    var n = 0;
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      if (f.type && !/^image\//.test(f.type)) continue;
+      queue.push({ file: f, cell: addCell(f), tries: 0 }); n++;
+    }
+    if (!n) return;
+    if (!t0) t0 = Date.now();
+    total += n; busy = true;
+    againBtn.style.display = 'none';
+    enablePick(false);
+    pump();
+  }
+
+  function pump() {
+    while (active < PARALLEL && queue.length) send(queue.shift());
+    if (active || queue.length) {
+      setStatus('⬆ 送信中 ' + saved + ' / ' + total + ' 枚');
+      bar(total ? saved / total * 80 : 0);
+    } else {
+      startImport();
+    }
+  }
+
+  function send(job) {
+    active++;
+    job.cell.tag.textContent = '送信中';
+    shrink(job.file).then(function (blob) {
+      return toB64(blob).then(function (b64) {
+        var name = (job.file.name || 'photo').replace(/\.[^.]+$/, '') + (blob === job.file ? (job.file.name.match(/\.[^.]+$/) || ['.jpg'])[0] : '.jpg');
+        return call({ action: 'mUpload', name: name, mimeType: blob.type || job.file.type || 'image/jpeg', b64: b64 });
+      });
+    }).then(function (res) {
+      if (!res || res.status !== 'ok') throw new Error((res && res.message) || '保存失敗');
+      active--; saved++;
+      job.cell.el.className = 'cell ok'; job.cell.tag.textContent = '✔ OK';
+      pump();
+    }).catch(function (e) {
+      active--;
+      if (job.tries < 2) {   // 2 回までやり直す
+        job.tries++; job.cell.tag.textContent = 'やり直し';
+        setTimeout(function () { queue.push(job); pump(); }, 1500 * job.tries);
+        return;
+      }
+      failed++; total--;
+      job.cell.el.className = 'cell ng'; job.cell.tag.textContent = '✖ 失敗';
+      console.log(e);
+      pump();
+    });
+  }
+
+  // ---- 全部送ったら 1 回だけ取込 ----
+  function startImport(tryNo) {
+    if (importing) return;
+    if (!saved) { finish(null); return; }
+    importing = true; tryNo = tryNo || 0;
+    setStatus('⏳ 工事ﾌｫﾙﾀﾞへ取込中…');
+    bar(85);
+    var stopPoll = poll();
+    call({ action: 'mImport' }).then(function (r) {
+      stopPoll(); importing = false;
+      if (r && r.status === 'busy' && tryNo < 6) {
+        setStatus('⏳ 他の取込が終わるのを待っています…');
+        setTimeout(function () { startImport(tryNo + 1); }, 10000);
+        return;
+      }
+      if (!r || r.status !== 'complete') throw new Error((r && (r.message || r.status)) || '取込失敗');
+      finish(r);
+    }).catch(function (e) {
+      stopPoll(); importing = false;
+      // 通信が切れても GAS 側は続いていることがあるので、進み具合で確かめる
+      checkDone(0, e);
+    });
+  }
+  function poll() {
+    var on = true;
+    (function tick() {
+      if (!on) return;
+      call({ action: 'mProgress' }).then(function (d) {
+        if (on && d && d.status === 'running') {
+          setStatus('⏳ ' + (d.currentMessage || '取込中…'));
+          if (d.total) bar(85 + 15 * (d.current || 0) / d.total);
+        }
+      }).catch(function () {}).then(function () { if (on) setTimeout(tick, 2000); });
+    })();
+    return function () { on = false; };
+  }
+  function checkDone(n, err) {
+    call({ action: 'mProgress' }).then(function (d) {
+      if (d && d.status === 'complete') { finish(d.result || { processed: saved }); return; }
+      if (d && d.status === 'running' && n < 90) { setStatus('⏳ ' + (d.currentMessage || '取込中…')); setTimeout(function () { checkDone(n + 1, err); }, 2000); return; }
+      fail('取込でｴﾗｰ: ' + ((d && d.currentMessage) || (err && err.message) || '不明'));
+    }).catch(function () {
+      if (n < 5) { setTimeout(function () { checkDone(n + 1, err); }, 3000); return; }
+      fail('通信ｴﾗｰ: ' + ((err && err.message) || '不明') + '。電波の良い所でもう一度ためしてください');
+    });
+  }
+
+  function finish(r) {
+    var n = (r && r.processed) || saved, sec = Math.round((Date.now() - t0) / 1000);
+    if (n) {
+      setStatus('✅ ' + n + ' 枚 送りました (' + sec + ' 秒)' + (failed ? '　※失敗 ' + failed + ' 枚' : ''), failed ? 'err' : 'done');
+    } else {
+      setStatus('✖ 送れませんでした (失敗 ' + failed + ' 枚)', 'err');
+    }
+    bar(100);
+    try { navigator.vibrate && navigator.vibrate([120, 80, 120]); } catch (e) {}
+    queue = []; total = 0; saved = 0; failed = 0; t0 = 0; busy = false;
+    enablePick(true);
+    againBtn.style.display = 'block';
+  }
+  function fail(msg) {
+    setStatus('❌ ' + msg, 'err');
+    busy = false; enablePick(true); againBtn.style.display = 'block';
+  }
+
+  picker.addEventListener('change', function () { addFiles(picker.files); picker.value = ''; });
+  againBtn.addEventListener('click', function () { gridEl.innerHTML = ''; bar(0); picker.click(); });
+  window.addEventListener('beforeunload', function (e) { if (busy) { e.preventDefault(); e.returnValue = ''; } });
+
+  // ---- 開いた時: 工事を確かめる ----
+  if (!K || !T) {
+    $('name').textContent = '―';
+    setStatus('AppSheet の「📁 複数枚写真取込み」から開いてください', 'err');
+    return;
+  }
+  $('no').textContent = '工事NO. ' + K;
+  call({ action: 'mInfo' }).then(function (r) {
+    if (!r || r.status !== 'ok') throw new Error((r && r.message) || '確認できません');
+    $('name').textContent = [r.meishou, r.meishou2].filter(Boolean).join('　') || '(名称なし)';
+    document.title = '写真 ' + K;
+    setStatus('「📷 写真を選ぶ」を押してください');
+    enablePick(true);
+  }).catch(function (e) {
+    $('name').textContent = '―';
+    setStatus('❌ ' + e.message, 'err');
+  });
+})();
+</script>
+</body>
+</html>
