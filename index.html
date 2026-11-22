@@ -55,7 +55,7 @@
 
   <label class="pick" id="pickBtn" for="picker" aria-disabled="true">📷 写真を選ぶ</label>
   <input id="picker" type="file" accept="image/*" multiple hidden>
-  <p class="hint">何枚でもまとめて選べます。送り終わるまでこの画面のままにしてください。</p>
+  <p class="hint">何枚でもまとめて選べます (PC は画面に写真をﾄﾞﾛｯﾌﾟでも可)。送り終わるまでこの画面のままにしてください。</p>
 
   <div class="status" id="status">準備中…</div>
   <div class="track"><div class="fill" id="fill"></div></div>
@@ -252,6 +252,13 @@
 
   picker.addEventListener('change', function () { addFiles(picker.files); picker.value = ''; });
   againBtn.addEventListener('click', function () { gridEl.innerHTML = ''; bar(0); picker.click(); });
+  // PC: 画面のどこに写真をﾄﾞﾛｯﾌﾟしても受け付ける (選べる時だけ)
+  document.addEventListener('dragover', function (e) { e.preventDefault(); });
+  document.addEventListener('drop', function (e) {
+    e.preventDefault();
+    if (pickBtn.getAttribute('aria-disabled') === 'true' || !e.dataTransfer) return;
+    addFiles(e.dataTransfer.files);
+  });
   window.addEventListener('beforeunload', function (e) { if (busy) { e.preventDefault(); e.returnValue = ''; } });
 
   // ---- 開いた時: 工事を確かめる ----
