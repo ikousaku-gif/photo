@@ -25,6 +25,12 @@
   .pick:active { transform: scale(.98); }
   .pick[aria-disabled="true"] { background: #9db8e6; box-shadow: none; pointer-events: none; }
   .hint { font-size: 13px; color: var(--sub); text-align: center; margin: 0 0 12px; }
+  .banner { display: none; border-radius: 14px; padding: 16px; margin-bottom: 10px; text-align: center;
+    font-size: 21px; font-weight: 800; line-height: 1.4; }
+  .banner small { display: block; font-size: 14px; font-weight: 600; margin-top: 4px; }
+  .banner.wait { display: block; background: #c62828; color: #fff; animation: blink 1.6s ease-in-out infinite; }
+  .banner.ok { display: block; background: #2e7d32; color: #fff; }
+  @keyframes blink { 50% { opacity: .78; } }
   .status { border-radius: 12px; padding: 14px 16px; font-size: 17px; font-weight: 700;
     background: var(--blue-soft); color: var(--blue); }
   .status.done { background: var(--green-soft); color: var(--green); font-size: 22px; text-align: center; padding: 20px 16px; }
@@ -57,6 +63,7 @@
   <input id="picker" type="file" accept="image/*" multiple hidden>
   <p class="hint">何枚でもまとめて選べます (PC は画面に写真をﾄﾞﾛｯﾌﾟでも可)。送り終わるまでこの画面のままにしてください。</p>
 
+  <div class="banner" id="banner"></div>
   <div class="status" id="status">準備中…</div>
   <div class="track"><div class="fill" id="fill"></div></div>
   <div class="grid" id="grid"></div>
@@ -78,9 +85,18 @@
   var $ = function (id) { return document.getElementById(id); };
   var statusEl = $('status'), fillEl = $('fill'), gridEl = $('grid'), pickBtn = $('pickBtn'), picker = $('picker'), againBtn = $('again');
 
-  var queue = [], active = 0, total = 0, saved = 0, failed = 0, busy = false, importing = false, t0 = 0;
+  var queue = [], retrying = 0, active = 0, total = 0, saved = 0, failed = 0, busy = false, importing = false, t0 = 0;
 
   function setStatus(t, cls) { statusEl.textContent = t; statusEl.className = 'status' + (cls ? ' ' + cls : ''); }
+  // 閉じてよいかの帯: 'wait' = まだ閉じない (赤) / 'ok' = 閉じてOK (緑) / '' = 出さない
+  function banner(kind, main, sub) {
+    var b = $('banner');
+    b.className = 'banner' + (kind ? ' ' + kind : '');
+    b.innerHTML = '';
+    if (!kind) return;
+    b.appendChild(document.createTextNode(main));
+    if (sub) { var s = document.createElement('small'); s.textContent = sub; b.appendChild(s); }
+  }
   function bar(p) { fillEl.style.width = Math.max(0, Math.min(100, p)) + '%'; }
   function enablePick(on) { pickBtn.setAttribute('aria-disabled', on ? 'false' : 'true'); }
 
@@ -143,6 +159,7 @@
     if (!n) return;
     if (!t0) t0 = Date.now();
     total += n; busy = true;
+    banner('wait', '⚠ まだ閉じないでください', '写真を送っています');
     againBtn.style.display = 'none';
     enablePick(false);
     pump();
@@ -150,7 +167,9 @@
 
   function pump() {
     while (active < PARALLEL && queue.length) send(queue.shift());
-    if (active || queue.length) {
+    if (active || queue.length || retrying) {
+      busy = true;
+      banner('wait', '⚠ まだ閉じないでください', '写真を送っています ' + saved + ' / ' + total + ' 枚');
       setStatus('⬆ 送信中 ' + saved + ' / ' + total + ' 枚');
       bar(total ? saved / total * 80 : 0);
     } else {
@@ -174,8 +193,8 @@
     }).catch(function (e) {
       active--;
       if (job.tries < 2) {   // 2 回までやり直す
-        job.tries++; job.cell.tag.textContent = 'やり直し';
-        setTimeout(function () { queue.push(job); pump(); }, 1500 * job.tries);
+        job.tries++; retrying++; job.cell.tag.textContent = 'やり直し';
+        setTimeout(function () { retrying--; queue.push(job); pump(); }, 1500 * job.tries);
         return;
       }
       failed++; total--;
@@ -190,6 +209,9 @@
     if (importing) return;
     if (!saved) { finish(null); return; }
     importing = true; tryNo = tryNo || 0;
+    // 写真は全部 GAS に届いた。ここから先は閉じても GAS が続ける (途中で止まっても 5 分おきの見回りが拾う)
+    busy = false;
+    banner('ok', '✔ 送り終わりました。もう閉じてOK', '工事ﾌｫﾙﾀﾞへの取込は自動で続きます');
     setStatus('⏳ 工事ﾌｫﾙﾀﾞへ取込中…');
     bar(85);
     var stopPoll = poll();
@@ -235,8 +257,10 @@
   function finish(r) {
     var n = (r && r.processed) || saved, sec = Math.round((Date.now() - t0) / 1000);
     if (n) {
+      banner('ok', '✔ 完了しました。閉じてOK', '');
       setStatus('✅ ' + n + ' 枚 送りました (' + sec + ' 秒)' + (failed ? '　※失敗 ' + failed + ' 枚' : ''), failed ? 'err' : 'done');
     } else {
+      banner('', '');
       setStatus('✖ 送れませんでした (失敗 ' + failed + ' 枚)', 'err');
     }
     bar(100);
@@ -246,12 +270,14 @@
     againBtn.style.display = 'block';
   }
   function fail(msg) {
+    // 写真は受け口に届いているので、閉じても 5 分おきの見回りが取り込む
+    banner('ok', '✔ 写真は届いています。閉じてOK', '取込は 15 分ほどで自動でやり直します');
     setStatus('❌ ' + msg, 'err');
     busy = false; enablePick(true); againBtn.style.display = 'block';
   }
 
   picker.addEventListener('change', function () { addFiles(picker.files); picker.value = ''; });
-  againBtn.addEventListener('click', function () { gridEl.innerHTML = ''; bar(0); picker.click(); });
+  againBtn.addEventListener('click', function () { gridEl.innerHTML = ''; bar(0); banner('', ''); picker.click(); });
   // PC: 画面のどこに写真をﾄﾞﾛｯﾌﾟしても受け付ける (選べる時だけ)
   document.addEventListener('dragover', function (e) { e.preventDefault(); });
   document.addEventListener('drop', function (e) {
